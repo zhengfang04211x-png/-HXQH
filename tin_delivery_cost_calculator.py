@@ -338,6 +338,7 @@ class TinDeliveryCostCalculator:
         end_date: datetime,
         interest_rate: Optional[float] = None,
         margin_rate: Optional[float] = None,
+        delivery_price: Optional[float] = None,
         inbound_fee_per_ton: Optional[float] = None,
         outbound_fee_per_ton: Optional[float] = None,
         packing_fee_per_ton: Optional[float] = None,
@@ -350,7 +351,8 @@ class TinDeliveryCostCalculator:
         计算期现套利总成本
         
         核心公式：
-        期现套利总成本 = 现货买入价 + 入库杂费 + (仓储费 × 天数) + 资金利息（现货+期货） + 交割手续费
+        期现套利总成本 = 现货买入价 + 入库杂费 + (仓储费 × 天数) + 资金利息（现货+期货） + 交割手续费 + 增值税
+        增值税 = (交割价格 - 现货成本) × 增值税率
         
         参数:
             spot_price: 现货价格（元/吨）
@@ -359,6 +361,7 @@ class TinDeliveryCostCalculator:
             end_date: 结束日期（交割日期）
             interest_rate: 资金利率（年化），默认使用self.default_interest_rate
             margin_rate: 期货保证金比例（如果提供了margin_rate，则使用此值）
+            delivery_price: 交割价格（元/吨），如果为None则使用spot_price
             其他费用参数：入库费、出库费等，如果为None则使用默认值
         
         返回:
@@ -366,10 +369,20 @@ class TinDeliveryCostCalculator:
         """
         holding_days = (end_date - start_date).days
         
-        # 1. 现货买入成本（含增值税）
-        spot_cost = spot_price * quantity_ton * (1 + self.vat_rate)
+        # 如果未提供交割价格，默认使用现货价格
+        if delivery_price is None:
+            delivery_price = spot_price
         
-        # 2. 交割杂费
+        # 1. 现货买入成本（不含增值税）
+        spot_cost_base = spot_price * quantity_ton
+        
+        # 2. 增值税 = (交割价格 - 现货成本) × 增值税率
+        vat_amount = max(0, (delivery_price - spot_price) * quantity_ton * self.vat_rate)
+        
+        # 3. 现货买入成本（含增值税）
+        spot_cost = spot_cost_base + vat_amount
+        
+        # 4. 交割杂费
         misc_fees = self.calculate_delivery_fees(
             quantity_ton,
             inbound_fee_per_ton,
@@ -381,16 +394,24 @@ class TinDeliveryCostCalculator:
             transport_fee_per_ton
         )
         
-        # 3. 仓储成本
+        # 5. 仓储成本
         storage = self.calculate_storage_cost(quantity_ton, holding_days)
         
-        # 4. 资金利息（同时计算现货和期货保证金）
+        # 6. 资金利息（同时计算现货和期货保证金）
+        # 注意：资金占用基于现货成本（含增值税）
         capital = self.calculate_capital_cost(
             spot_price, quantity_ton, start_date, end_date,
             interest_rate, margin_rate
         )
+        # 调整现货资金占用，包含增值税
+        capital["spot_capital_amount"] = spot_cost
+        # 重新计算现货资金成本
+        daily_rate = capital["interest_rate"] / 365
+        capital["spot_interest_cost"] = capital["spot_capital_amount"] * daily_rate * capital["holding_days"]
+        capital["total_capital_amount"] = capital["spot_capital_amount"] + capital["futures_capital_amount"]
+        capital["total_interest_cost"] = capital["spot_interest_cost"] + capital["futures_interest_cost"]
         
-        # 5. 总成本
+        # 7. 总成本
         total_cost = (
             spot_cost +
             misc_fees["total_misc_fees"] +
@@ -398,15 +419,16 @@ class TinDeliveryCostCalculator:
             capital["total_interest_cost"]
         )
         
-        # 6. 单位成本（元/吨）
+        # 8. 单位成本（元/吨）
         cost_per_ton = total_cost / quantity_ton
         
-        # 7. 盈亏平衡点（期货价格需要达到这个水平才能保本）
+        # 9. 盈亏平衡点（期货价格需要达到这个水平才能保本）
         break_even_price = spot_price + (total_cost - spot_cost) / quantity_ton
         
         return {
             "input": {
                 "spot_price": spot_price,
+                "delivery_price": delivery_price,
                 "quantity_ton": quantity_ton,
                 "start_date": start_date,
                 "end_date": end_date,
@@ -416,8 +438,8 @@ class TinDeliveryCostCalculator:
             },
             "cost_breakdown": {
                 "spot_cost_with_vat": spot_cost,
-                "spot_cost_base": spot_price * quantity_ton,
-                "vat_amount": spot_price * quantity_ton * self.vat_rate,
+                "spot_cost_base": spot_cost_base,
+                "vat_amount": vat_amount,
                 "misc_fees": misc_fees,
                 "storage_cost": storage["storage_cost"],
                 "capital_cost": capital["total_interest_cost"],
@@ -441,6 +463,7 @@ class TinDeliveryCostCalculator:
         end_date: datetime,
         interest_rate: Optional[float] = None,
         margin_rate: Optional[float] = None,
+        delivery_price: Optional[float] = None,
         **fee_kwargs
     ) -> Dict[str, any]:
         """
@@ -454,11 +477,16 @@ class TinDeliveryCostCalculator:
             end_date: 结束日期
             interest_rate: 资金利率（年化）
             margin_rate: 期货保证金比例
+            delivery_price: 交割价格（元/吨），如果为None则使用spot_price
             其他费用参数：**fee_kwargs
         
         返回:
             包含套利分析结果的字典
         """
+        # 如果未提供交割价格，默认使用期货价格
+        if delivery_price is None:
+            delivery_price = futures_price
+        
         # 计算总成本
         cost_result = self.calculate_total_cost(
             spot_price=spot_price,
@@ -467,6 +495,7 @@ class TinDeliveryCostCalculator:
             end_date=end_date,
             interest_rate=interest_rate,
             margin_rate=margin_rate,
+            delivery_price=delivery_price,
             **fee_kwargs
         )
         

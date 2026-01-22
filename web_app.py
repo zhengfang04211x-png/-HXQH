@@ -78,6 +78,15 @@ futures_price = st.sidebar.number_input(
     help="期货合约价格"
 )
 
+delivery_price = st.sidebar.number_input(
+    "交割价格（元/吨）",
+    min_value=0.0,
+    value=408290.0,
+    step=1000.0,
+    format="%.2f",
+    help="实际交割价格（默认等于期货价格，可手动修改）"
+)
+
 quantity_ton = st.sidebar.number_input(
     "数量（吨）",
     min_value=0.1,
@@ -418,6 +427,7 @@ try:
     result = calculator.check_arbitrage(
         spot_price=spot_price,
         futures_price=futures_price,
+        delivery_price=delivery_price,
         quantity_ton=quantity_ton,
         start_date=start_dt,
         end_date=end_dt,
@@ -440,9 +450,10 @@ try:
     st.header("📊 第一部分：每吨各项成本")
     
     # 计算每吨成本
-    spot_cost_per_ton = spot_price * (1 + vat_rate)  # 现货成本（含税）
     spot_cost_base_per_ton = spot_price  # 现货基价
-    vat_per_ton = spot_price * vat_rate  # 增值税
+    # 增值税 = (交割价格 - 现货成本) × 增值税率
+    vat_per_ton = (delivery_price - spot_price) * vat_rate if delivery_price > spot_price else 0
+    spot_cost_per_ton = spot_price + vat_per_ton  # 现货成本（含增值税）
     
     # 交割杂费（每吨）
     inbound_fee_per_ton_calc = inbound_fee_per_ton
@@ -541,7 +552,8 @@ try:
     st.header("💰 第二部分：资金需求")
     
     # 计算资金需求
-    spot_capital_total = spot_price * quantity_ton * (1 + vat_rate)  # 购买现货需要资金
+    # 现货资金占用 = 现货成本 + 增值税
+    spot_capital_total = breakdown['spot_cost_with_vat']  # 购买现货需要资金（含增值税）
     futures_margin_total = spot_price * quantity_ton * margin_info['final_rate']  # 购买期货需要资金（保证金）
     total_capital_needed = spot_capital_total + futures_margin_total  # 总资金需求
     
@@ -551,11 +563,11 @@ try:
         st.metric(
             "购买现货需要资金",
             f"¥{spot_capital_total:,.2f}",
-            help="现货价格 × 数量 × (1 + 增值税率)"
+            help="现货成本 + 增值税"
         )
-        st.caption(f"现货价格: ¥{spot_price:,.2f}/吨")
+        st.caption(f"现货基价: ¥{spot_price:,.2f}/吨")
         st.caption(f"数量: {quantity_ton:.2f} 吨")
-        st.caption(f"增值税率: {vat_rate*100:.0f}%")
+        st.caption(f"增值税: ¥{breakdown['vat_amount']:,.2f}")
     
     with capital_col2:
         st.metric(
@@ -707,6 +719,7 @@ try:
         - **现货成本（含税）**: ¥{breakdown['spot_cost_with_vat']:,.2f}
           - 现货基价: ¥{breakdown['spot_cost_base']:,.2f}
           - 增值税 ({vat_rate*100:.0f}%): ¥{breakdown['vat_amount']:,.2f}
+          - 计算公式: (交割价格 {delivery_price:,.2f} - 现货价格 {spot_price:,.2f}) × {vat_rate*100:.0f}%
         
         - **交割杂费**: ¥{breakdown['misc_fees']['total_misc_fees']:,.2f}
           - 入库费: ¥{misc['inbound_fee']:,.2f}
@@ -742,6 +755,7 @@ try:
         st.markdown(f"""
         - **现货价格**: ¥{spot_price:,.2f}/吨
         - **期货价格**: ¥{futures_price:,.2f}/吨
+        - **交割价格**: ¥{delivery_price:,.2f}/吨
         - **盈亏平衡点**: ¥{arbitrage_result['break_even_futures_price']:,.2f}/吨
         - **期货收入**: ¥{arbitrage_result['futures_revenue']:,.2f}
         - **总成本（不含税）**: ¥{arbitrage_result['total_cost_excl_vat']:,.2f}
