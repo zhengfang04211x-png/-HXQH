@@ -311,18 +311,19 @@ st.sidebar.subheader("入库/出库方式")
 
 inbound_method = st.sidebar.selectbox(
     "入库方式",
-    ["专用线", "非箱式车辆自送", "箱式车自送（包括集装箱车辆）"],
-    help="选择入库方式"
+    ["不出入库", "专用线", "非箱式车辆自送", "箱式车自送（包括集装箱车辆）"],
+    help="选择入库方式（仓单交割选择'不出入库'）"
 )
 
 outbound_method = st.sidebar.selectbox(
     "出库方式",
-    ["专用线", "非箱式车辆自提", "箱式车辆自提（包括集装箱车辆）"],
-    help="选择出库方式"
+    ["不出入库", "专用线", "非箱式车辆自提", "箱式车辆自提（包括集装箱车辆）"],
+    help="选择出库方式（仓单交割选择'不出入库'）"
 )
 
 # 入库费用映射
 inbound_fee_map = {
+    "不出入库": 0.0,
     "专用线": 35.0,
     "非箱式车辆自送": 30.0,
     "箱式车自送（包括集装箱车辆）": 40.0
@@ -330,6 +331,7 @@ inbound_fee_map = {
 
 # 出库费用映射
 outbound_fee_map = {
+    "不出入库": 0.0,
     "专用线": 35.0,
     "非箱式车辆自提": 25.0,
     "箱式车辆自提（包括集装箱车辆）": 35.0
@@ -503,8 +505,8 @@ try:
             "现货基价",
             "增值税",
             "现货成本小计（含税）",
-            "入库费",
-            "出库费",
+            "入库费" if inbound_fee_per_ton_calc > 0 else None,
+            "出库费" if outbound_fee_per_ton_calc > 0 else None,
             "打包费",
             "过户费",
             "交割手续费",
@@ -521,8 +523,8 @@ try:
             spot_cost_base_per_ton,
             vat_per_ton,
             spot_cost_per_ton,
-            inbound_fee_per_ton_calc,
-            outbound_fee_per_ton_calc,
+            inbound_fee_per_ton_calc if inbound_fee_per_ton_calc > 0 else None,
+            outbound_fee_per_ton_calc if outbound_fee_per_ton_calc > 0 else None,
             packing_fee_per_ton_calc,
             transfer_fee_per_ton_calc,
             delivery_fee_per_ton_calc,
@@ -722,8 +724,8 @@ try:
           - 计算公式: (交割价格 {delivery_price:,.2f} - 现货价格 {spot_price:,.2f}) × {vat_rate*100:.0f}%
         
         - **交割杂费**: ¥{breakdown['misc_fees']['total_misc_fees']:,.2f}
-          - 入库费: ¥{misc['inbound_fee']:,.2f}
-          - 出库费: ¥{misc['outbound_fee']:,.2f}
+          {f"- 入库费: ¥{misc['inbound_fee']:,.2f}" if misc['inbound_fee'] > 0 else ""}
+          {f"- 出库费: ¥{misc['outbound_fee']:,.2f}" if misc['outbound_fee'] > 0 else ""}
           - 打包费: ¥{misc['packing_fee']:,.2f}
           - 过户费: ¥{misc['transfer_fee']:,.2f}
           - 交割手续费: ¥{misc['delivery_fee']:,.2f}
